@@ -388,3 +388,151 @@ def create_indicator_chart(df: pd.DataFrame, indicator: str, title: str = None) 
     )
     
     return fig
+"""
+ui/components/charts.py - Chart-Komponenten (Fixed Layout)
+"""
+
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pandas as pd
+from typing import Dict
+from config import COLORS, CHART_TEMPLATE, CHART_HEIGHT, VOLUME_HEIGHT
+
+def create_main_chart(
+    df: pd.DataFrame,
+    ticker: str,
+    show_indicators: Dict[str, bool]
+) -> go.Figure:
+    """
+    Erstellt Haupt-Chart mit Candlesticks, Volume-Overlay und Subplots (RSI/MACD).
+    Behebt den Axis-Clash zwischen Volume und Indikatoren.
+    """
+    # 1. Welche Subplots brauchen wir?
+    has_rsi = show_indicators.get("rsi", False) and 'rsi' in df.columns
+    has_macd = show_indicators.get("macd", False) and 'macd' in df.columns
+    
+    # Layout-Definition
+    rows = 1
+    row_heights = [0.7] # Start mit 70% für Price/Vol
+    specs = [[{"secondary_y": True}]] # Zeile 1 hat zwei Y-Achsen (Preis links, Vol rechts)
+    
+    if has_rsi:
+        rows += 1
+        row_heights.append(0.15)
+        specs.append([{"secondary_y": False}])
+        
+    if has_macd:
+        rows += 1
+        row_heights.append(0.15)
+        specs.append([{"secondary_y": False}])
+
+    # Normalisierung der row_heights, damit Summe = 1.0 (Wichtig für Plotly)
+    total_height = sum(row_heights)
+    row_heights = [h/total_height for h in row_heights]
+
+    # Chart erstellen
+    fig = make_subplots(
+        rows=rows,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        row_heights=row_heights,
+        specs=specs,
+        subplot_titles=[f"{ticker} Chart"] + (["RSI"] if has_rsi else []) + (["MACD"] if has_macd else [])
+    )
+
+    # ─────────────────────────────────────────────
+    # ROW 1: CANDLESTICK & VOLUME
+    # ─────────────────────────────────────────────
+    
+    # Candlestick (Linke Achse)
+    fig.add_trace(
+        go.Candlestick(
+            x=df.index,
+            open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+            name=ticker,
+            increasing_line_color=COLORS['bullish'],
+            decreasing_line_color=COLORS['bearish'],
+            showlegend=False
+        ),
+        row=1, col=1, secondary_y=False
+    )
+    
+    # Volume (Rechte Achse - Overlay)
+    if 'volume' in df.columns:
+        colors = [COLORS['bullish'] if c >= o else COLORS['bearish'] 
+                  for c, o in zip(df['close'], df['open'])]
+        
+        fig.add_trace(
+            go.Bar(
+                x=df.index, y=df['volume'],
+                name='Volume',
+                marker_color=colors,
+                opacity=0.3,
+                showlegend=False
+            ),
+            row=1, col=1, secondary_y=True
+        )
+        
+        # Volume MA
+        if show_indicators.get("volume", False) and 'volume_ma' in df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df.index, y=df['volume_ma'],
+                    mode='lines', name='Vol MA',
+                    line=dict(color=COLORS['volume'], width=1),
+                    showlegend=False
+                ),
+                row=1, col=1, secondary_y=True
+            )
+
+    # Indikatoren im Hauptchart (SMA, EMA, BB)
+    if show_indicators.get("sma_20") and 'sma_20' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['sma_20'], mode='lines', name='SMA 20', line=dict(color=COLORS['sma_fast'], width=1)), row=1, col=1, secondary_y=False)
+    
+    if show_indicators.get("sma_50") and 'sma_50' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['sma_50'], mode='lines', name='SMA 50', line=dict(color=COLORS['sma_slow'], width=1)), row=1, col=1, secondary_y=False)
+        
+    if show_indicators.get("bb") and 'bb_upper' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['bb_upper'], mode='lines', line=dict(color=COLORS['bb_upper'], width=1, dash='dot'), showlegend=False), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(x=df.index, y=df['bb_lower'], mode='lines', line=dict(color=COLORS['bb_lower'], width=1, dash='dot'), fill='tonexty', fillcolor='rgba(120,144,156,0.1)', name='Bollinger', showlegend=True), row=1, col=1, secondary_y=False)
+
+    # ─────────────────────────────────────────────
+    # ROW 2 & 3: RSI / MACD
+    # ─────────────────────────────────────────────
+    current_row = 2
+    
+    if has_rsi:
+        fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], mode='lines', name='RSI', line=dict(color=COLORS['rsi'])), row=current_row, col=1)
+        fig.add_hline(y=70, line_dash="dash", line_color="red", opacity=0.5, row=current_row, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="green", opacity=0.5, row=current_row, col=1)
+        fig.update_yaxes(range=[0, 100], row=current_row, col=1)
+        current_row += 1
+        
+    if has_macd:
+        fig.add_trace(go.Scatter(x=df.index, y=df['macd'], mode='lines', name='MACD', line=dict(color=COLORS['macd'])), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['macd_signal'], mode='lines', name='Signal', line=dict(color=COLORS['signal'])), row=current_row, col=1)
+        fig.add_trace(go.Bar(x=df.index, y=df['macd_hist'], name='Hist', marker_color=[COLORS['bullish'] if v>=0 else COLORS['bearish'] for v in df['macd_hist']]), row=current_row, col=1)
+
+    # ─────────────────────────────────────────────
+    # STYLING
+    # ─────────────────────────────────────────────
+    fig.update_layout(
+        template=CHART_TEMPLATE,
+        height=CHART_HEIGHT + (150 * (rows - 1)),
+        margin=dict(l=10, r=10, t=30, b=10),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis_rangeslider_visible=False
+    )
+    
+    # Volume Skalierung (damit Balken unten bleiben)
+    if 'volume' in df.columns:
+        max_vol = df['volume'].max()
+        fig.update_yaxes(range=[0, max_vol * 4], showticklabels=False, row=1, col=1, secondary_y=True)
+
+    return fig
+
+def create_indicator_chart(df, indicator, title=None):
+    """Fallback Funktion"""
+    return go.Figure()

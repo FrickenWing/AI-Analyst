@@ -26,6 +26,19 @@ from data.openbb_client import get_client
 from services.portfolio_service import get_portfolio_service
 from utils.formatters import fmt_price, fmt_pct, fmt_large, color_pct, trend_arrow
 
+# Beispiel für den Anfang deiner pages/1_charts.py Datei:
+
+# Hole den aktuell ausgewählten Ticker aus dem globalen Speicher. 
+# Falls noch nichts gesucht wurde, nimm "AAPL" als Standardwert.
+current_ticker = st.session_state.get("current_ticker", "AAPL")
+
+# (Optional) Lass den Nutzer den Ticker in der Sidebar der Unterseite trotzdem noch manuell anpassen
+ticker = st.sidebar.text_input("Ticker Symbol", current_ticker).upper()
+
+# Falls der Nutzer es in der Sidebar ändert, aktualisiere den State!
+if ticker != current_ticker:
+    st.session_state["current_ticker"] = ticker
+
 st.set_page_config(page_title="Portfolio", page_icon="💼", layout="wide")
 
 # ─────────────────────────────────────────────

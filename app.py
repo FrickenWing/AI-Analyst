@@ -50,44 +50,69 @@ with st.sidebar:
         st.rerun()
 
 # ── Market Overview ───────────────────────────
-st.markdown("## 🌍 Market Overview")
-st.caption("Live Marktdaten via yfinance")
+st.markdown("### 🔍 Globale Aktiensuche")
+st.caption("Suche nach Unternehmensnamen (z.B. 'Nvidia') oder Tickern (z.B. 'SAP.DE')")
 
-client = get_client()
+# 1. Such-Eingabefeld erstellen
+search_query = st.text_input("Suchbegriff eingeben...", placeholder="Z.B. Apple, TSLA, BMW.DE")
 
-index_tickers = {
-    "^GSPC":  "S&P 500",
-    "^IXIC":  "NASDAQ",
-    "^DJI":   "Dow Jones",
-    "^VIX":   "VIX",
-    "^GDAXI": "DAX",
-}
-
-cols = st.columns(len(index_tickers))
-for col, (symbol, name) in zip(cols, index_tickers.items()):
-    with col:
-        try:
-            quote      = client.get_quote(symbol)
-            price      = quote.get("price", 0)
-            change_pct = quote.get("change_pct", 0)
-            color      = COLORS["bullish"] if change_pct >= 0 else COLORS["bearish"]
-            arrow      = "▲" if change_pct >= 0 else "▼"
-            st.markdown(f"""
-            <div class="ticker-card">
-                <div style="font-size:0.8rem; color:#8b95a1;">{name}</div>
-                <div style="font-size:1.3rem; font-weight:700;">{price:,.2f}</div>
-                <div style="color:{color}; font-size:0.9rem;">{arrow} {change_pct:+.2f}%</div>
-            </div>
-            """, unsafe_allow_html=True)
-        except Exception:
-            st.markdown(f"""
-            <div class="ticker-card">
-                <div style="font-size:0.8rem; color:#8b95a1;">{name}</div>
-                <div style="font-size:1rem; color:#4b5563;">–</div>
-            </div>
-            """, unsafe_allow_html=True)
-
+# 2. Wenn ein Text eingegeben wurde, starte die Suche
+if search_query:
+    client = get_client()
+    with st.spinner("Suche in globaler Datenbank..."):
+        search_results = client.search_ticker(search_query)
+        
+    if search_results:
+        st.markdown("**Ergebnisse (Klicken zum Auswählen):**")
+        
+        # Gehe durch alle Treffer und erstelle einen Button für jeden
+        for res in search_results:
+            # Button Beschriftung z.B.: "AAPL - Apple Inc. (NASDAQ)"
+            button_label = f"**{res['ticker']}** | {res['name']} ({res['exchange']})"
+            
+            if st.button(button_label, key=f"search_{res['ticker']}", use_container_width=True):
+                # 3. Wenn geklickt wird, speichere den Ticker global ab!
+                st.session_state["current_ticker"] = res['ticker']
+                st.success(f"✅ {res['name']} ({res['ticker']}) ausgewählt! Du kannst jetzt die Analyse-Seiten in der Sidebar öffnen.")
+    else:
+        st.warning(f"Keine Treffer für '{search_query}' gefunden. Versuche einen anderen Namen.")
 st.divider()
+
+# client = get_client()
+
+# index_tickers = {
+#     "^GSPC":  "S&P 500",
+#     "^IXIC":  "NASDAQ",
+#     "^DJI":   "Dow Jones",
+#     "^VIX":   "VIX",
+#     "^GDAXI": "DAX",
+# }
+
+# cols = st.columns(len(index_tickers))
+# for col, (symbol, name) in zip(cols, index_tickers.items()):
+#     with col:
+#         try:
+#             quote      = client.get_quote(symbol)
+#             price      = quote.get("price", 0)
+#             change_pct = quote.get("change_pct", 0)
+#             color      = COLORS["bullish"] if change_pct >= 0 else COLORS["bearish"]
+#             arrow      = "▲" if change_pct >= 0 else "▼"
+#             st.markdown(f"""
+#             <div class="ticker-card">
+#                 <div style="font-size:0.8rem; color:#8b95a1;">{name}</div>
+#                 <div style="font-size:1.3rem; font-weight:700;">{price:,.2f}</div>
+#                 <div style="color:{color}; font-size:0.9rem;">{arrow} {change_pct:+.2f}%</div>
+#             </div>
+#             """, unsafe_allow_html=True)
+#         except Exception:
+#             st.markdown(f"""
+#             <div class="ticker-card">
+#                 <div style="font-size:0.8rem; color:#8b95a1;">{name}</div>
+#                 <div style="font-size:1rem; color:#4b5563;">–</div>
+#             </div>
+#             """, unsafe_allow_html=True)
+
+# st.divider()
 
 # ── Watchlist ─────────────────────────────────
 st.markdown("### ⭐ Watchlist")

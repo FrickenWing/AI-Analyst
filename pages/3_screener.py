@@ -7,6 +7,19 @@ import pandas as pd
 from services.screener_service import get_screener_service, UNIVERSES
 from ui.components.tables import screener_result_table
 
+# Beispiel für den Anfang deiner pages/1_charts.py Datei:
+
+# Hole den aktuell ausgewählten Ticker aus dem globalen Speicher. 
+# Falls noch nichts gesucht wurde, nimm "AAPL" als Standardwert.
+current_ticker = st.session_state.get("current_ticker", "AAPL")
+
+# (Optional) Lass den Nutzer den Ticker in der Sidebar der Unterseite trotzdem noch manuell anpassen
+ticker = st.sidebar.text_input("Ticker Symbol", current_ticker).upper()
+
+# Falls der Nutzer es in der Sidebar ändert, aktualisiere den State!
+if ticker != current_ticker:
+    st.session_state["current_ticker"] = ticker
+
 st.set_page_config(page_title="Screener", page_icon="🔍", layout="wide")
 
 st.sidebar.title("🔍 Stock Screener")
