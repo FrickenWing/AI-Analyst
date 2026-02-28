@@ -8,15 +8,15 @@ class MarketService:
         self.client = get_client()
 
     def get_stock_overview(self, ticker: str) -> dict:
-        """Kombiniert Company Info und aktuelles Quote-Objekt."""
-        info = self.client.get_company_info(ticker)
-        quote = self.client.get_quote(ticker)
-        # Werte zusammenführen
-        overview = {**info, **quote}
-        return overview
+        """
+        Kombiniert Company Info und aktuelles Quote-Objekt.
+        Hinweis: Der neue Client liefert alle Infos direkt in get_quote.
+        """
+        # Wir rufen nur noch get_quote auf, da es jetzt Sector, Description etc. enthält
+        return self.client.get_quote(ticker)
 
     def get_key_metrics(self, ticker: str) -> list[dict]:
-        """Liefert KPIs für die Metrik-Reihe auf der Fundamentals-Seite."""
+        """Liefert KPIs für die Metrik-Reihe."""
         quote = self.client.get_quote(ticker)
         
         return [
@@ -28,17 +28,16 @@ class MarketService:
 
     def get_financial_statements(self, ticker: str) -> dict:
         """Lädt Bilanz, GuV und Cashflow."""
-        return {
-            "income": self.client.get_financials(ticker, "income"),
-            "balance": self.client.get_financials(ticker, "balance"),
-            "cashflow": self.client.get_financials(ticker, "cashflow")
-        }
+        # Der neue Client liefert bereits ein Dictionary mit allen 3 Tabellen zurück
+        return self.client.get_financials(ticker)
 
     def get_growth_metrics(self, ticker: str) -> list[dict]:
-        return [{"metric": "Umsatzwachstum", "value": "Daten via API laden..."}]
+        # Platzhalter für zukünftige Berechnungen
+        return []
 
     def get_analyst_info(self, ticker: str) -> dict:
-        return {"recommendation": "Hold", "target_mean": 0.0, "fmt_upside": "N/A"}
+        # Leitet direkt an den Client weiter, der jetzt echte Daten holt
+        return self.client.get_analyst_info(ticker)
 
 # --- SINGLETON PATTERN ---
 _market_service_instance = None

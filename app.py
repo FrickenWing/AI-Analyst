@@ -1,161 +1,144 @@
-"""
-app.py - Haupt-Entry-Point für OpenBB Terminal Pro
-Start: streamlit run app.py
-"""
-
-import sys
-import os
 import streamlit as st
-
-# ─────────────────────────────────────────────
-# WICHTIG: Projektpfad zu sys.path hinzufügen
-# Damit alle Module (config, data, ui, ...) gefunden werden
-# ─────────────────────────────────────────────
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
-
+import pandas as pd
+import plotly.express as px
 from data.openbb_client import get_client
-from config import APP_TITLE, APP_ICON, MARKET_INDICES, COLORS
+from ui.components.metrics import render_kpi_card  # Falls du das ausgelagert hast, sonst nutzen wir st.metric
 
+# --- CONFIG ---
 st.set_page_config(
-    page_title=APP_TITLE,
-    page_icon=APP_ICON,
+    page_title="AI Analyst Dashboard", 
+    page_icon="🚀", 
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded"
 )
 
+# Custom CSS für Dashboard-Cards
 st.markdown("""
 <style>
-    .stMetric { background: #1e2329; padding: 12px; border-radius: 8px; }
-    .ticker-card {
-        background: #1e2329; padding: 12px 16px;
-        border-radius: 8px; border: 1px solid #2d3748; text-align: center;
+    /* Karten-Look für Indizes */
+    div[data-testid="stMetric"] {
+        background-color: #1e2329;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #333;
+    }
+    /* Hover Effekt für Buttons */
+    button[kind="secondary"]:hover {
+        border-color: #00C805 !important;
+        color: #00C805 !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Sidebar ───────────────────────────────────
-with st.sidebar:
-    st.title(f"{APP_ICON} {APP_TITLE}")
-    st.caption("Powered by OpenBB Platform")
-    st.divider()
+# Client init
+client = get_client()
 
-    st.markdown("### 🧭 Navigation")
-    st.caption("Seiten oben in der Sidebar anklicken ↑")
+# --- HEADER ---
+st.title("🚀 Market Dashboard")
+st.markdown("Willkommen zurück! Hier ist dein Marktüberblick für heute.")
 
-    st.divider()
-    if st.button("🔄 Daten refreshen"):
-        get_client().clear_cache()
-        st.rerun()
+st.divider()
 
-# ── Market Overview ───────────────────────────
-st.markdown("### 🔍 Globale Aktiensuche")
-st.caption("Suche nach Unternehmensnamen (z.B. 'Nvidia') oder Tickern (z.B. 'SAP.DE')")
+# --- 1. MARKET INDICES (Die "Big Picture" View) ---
+st.subheader("🌍 Markt Stimmung")
 
-# 1. Such-Eingabefeld erstellen
-search_query = st.text_input("Suchbegriff eingeben...", placeholder="Z.B. Apple, TSLA, BMW.DE")
+# Wir simulieren Indizes durch ETFs (da wir Realtime-Daten brauchen)
+indices = [
+    {"symbol": "SPY", "name": "S&P 500"},
+    {"symbol": "QQQ", "name": "Nasdaq 100"},
+    {"symbol": "DIA", "name": "Dow Jones"},
+    {"symbol": "BTC-USD", "name": "Bitcoin"},
+]
 
-# 2. Wenn ein Text eingegeben wurde, starte die Suche
-if search_query:
-    client = get_client()
-    with st.spinner("Suche in globaler Datenbank..."):
-        search_results = client.search_ticker(search_query)
+cols = st.columns(len(indices))
+
+# Daten laden und anzeigen
+for col, idx in zip(cols, indices):
+    with col:
+        q = client.get_quote(idx["symbol"])
+        if q:
+            st.metric(
+                label=idx["name"],
+                value=f"{q.get('price', 0):.2f}",
+                delta=f"{q.get('change_pct', 0):.2%}"
+            )
+        else:
+            st.metric(label=idx["name"], value="Lade...", delta=None)
+
+st.write("") # Spacer
+
+# --- 2. TRENDING & WATCHLIST ---
+col_trend, col_nav = st.columns([2, 1])
+
+with col_trend:
+    st.subheader("🔥 Markt Pulse (Tech & AI)")
+    
+    # Eine feste Watchlist für den schnellen Blick (könnte man später dynamisch machen)
+    watchlist_tickers = ["NVDA", "AAPL", "MSFT", "TSLA", "AMD", "GOOGL", "AMZN"]
+    
+    watchlist_data = []
+    # Progress Bar für das Laden der Watchlist, damit es nicht "hängt"
+    progress_text = "Lade Kurse..."
+    my_bar = st.progress(0, text=progress_text)
+    
+    for i, t in enumerate(watchlist_tickers):
+        q = client.get_quote(t)
+        if q:
+            watchlist_data.append({
+                "Symbol": t,
+                "Preis": q.get("price"),
+                "Änderung %": q.get("change_pct"), # Rohdaten für Farbe
+                "Volumen": q.get("volume")
+            })
+        my_bar.progress((i + 1) / len(watchlist_tickers), text=progress_text)
+    
+    my_bar.empty() # Balken entfernen wenn fertig
+
+    if watchlist_data:
+        df_watch = pd.DataFrame(watchlist_data)
         
-    if search_results:
-        st.markdown("**Ergebnisse (Klicken zum Auswählen):**")
-        
-        # Gehe durch alle Treffer und erstelle einen Button für jeden
-        for res in search_results:
-            # Button Beschriftung z.B.: "AAPL - Apple Inc. (NASDAQ)"
-            button_label = f"**{res['ticker']}** | {res['name']} ({res['exchange']})"
-            
-            if st.button(button_label, key=f"search_{res['ticker']}", use_container_width=True):
-                # 3. Wenn geklickt wird, speichere den Ticker global ab!
-                st.session_state["current_ticker"] = res['ticker']
-                st.success(f"✅ {res['name']} ({res['ticker']}) ausgewählt! Du kannst jetzt die Analyse-Seiten in der Sidebar öffnen.")
+        # Formatierung für die Anzeige
+        st.dataframe(
+            df_watch,
+            column_config={
+                "Symbol": st.column_config.TextColumn("Ticker", width="medium"),
+                "Preis": st.column_config.NumberColumn("Preis ($)", format="$%.2f"),
+                "Änderung %": st.column_config.NumberColumn(
+                    "24h %",
+                    format="%.2f %%",
+                ),
+                "Volumen": st.column_config.NumberColumn("Volumen", format="%d"),
+            },
+            hide_index=True,
+            use_container_width=True,
+            height=300
+        )
     else:
-        st.warning(f"Keine Treffer für '{search_query}' gefunden. Versuche einen anderen Namen.")
+        st.info("Konnte Watchlist nicht laden.")
+
+with col_nav:
+    st.subheader("⚡ Quick Actions")
+    
+    with st.container():
+        st.markdown("""
+        <div style="background-color: #262730; padding: 20px; border-radius: 10px;">
+            <h4>Was möchtest du tun?</h4>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.write("")
+        
+        # Navigation ist in Streamlit via Sidebar gelöst, aber wir können 
+        # hier Hinweise geben oder Session State setzen.
+        st.info("👈 Nutze die Sidebar, um zum **Terminal** zu wechseln.")
+        
+        st.markdown("### 💡 Neuigkeiten")
+        st.caption("Das neue **Terminal** ist jetzt live! Alle Charts & Finanzen an einem Ort.")
+        
+        # Platz für zukünftige Features (z.B. "Zuletzt angesehen")
+        if "ticker" in st.session_state:
+            st.write(f"Zuletzt analysiert: **{st.session_state.ticker}**")
+
+# --- FOOTER ---
 st.divider()
-
-# client = get_client()
-
-# index_tickers = {
-#     "^GSPC":  "S&P 500",
-#     "^IXIC":  "NASDAQ",
-#     "^DJI":   "Dow Jones",
-#     "^VIX":   "VIX",
-#     "^GDAXI": "DAX",
-# }
-
-# cols = st.columns(len(index_tickers))
-# for col, (symbol, name) in zip(cols, index_tickers.items()):
-#     with col:
-#         try:
-#             quote      = client.get_quote(symbol)
-#             price      = quote.get("price", 0)
-#             change_pct = quote.get("change_pct", 0)
-#             color      = COLORS["bullish"] if change_pct >= 0 else COLORS["bearish"]
-#             arrow      = "▲" if change_pct >= 0 else "▼"
-#             st.markdown(f"""
-#             <div class="ticker-card">
-#                 <div style="font-size:0.8rem; color:#8b95a1;">{name}</div>
-#                 <div style="font-size:1.3rem; font-weight:700;">{price:,.2f}</div>
-#                 <div style="color:{color}; font-size:0.9rem;">{arrow} {change_pct:+.2f}%</div>
-#             </div>
-#             """, unsafe_allow_html=True)
-#         except Exception:
-#             st.markdown(f"""
-#             <div class="ticker-card">
-#                 <div style="font-size:0.8rem; color:#8b95a1;">{name}</div>
-#                 <div style="font-size:1rem; color:#4b5563;">–</div>
-#             </div>
-#             """, unsafe_allow_html=True)
-
-# st.divider()
-
-# ── Watchlist ─────────────────────────────────
-st.markdown("### ⭐ Watchlist")
-watchlist = st.session_state.get("watchlist", ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"])
-
-for i in range(0, len(watchlist), 5):
-    chunk   = watchlist[i:i+5]
-    wl_cols = st.columns(len(chunk))
-    for col, ticker in zip(wl_cols, chunk):
-        with col:
-            try:
-                quote      = client.get_quote(ticker)
-                price      = quote.get("price", 0)
-                change_pct = quote.get("change_pct", 0)
-                color      = COLORS["bullish"] if change_pct >= 0 else COLORS["bearish"]
-                arrow      = "▲" if change_pct >= 0 else "▼"
-                st.markdown(f"""
-                <div class="ticker-card">
-                    <div style="font-weight:700;">{ticker}</div>
-                    <div>${price:,.2f}</div>
-                    <div style="color:{color}; font-size:0.85rem;">{arrow} {change_pct:+.2f}%</div>
-                </div>
-                """, unsafe_allow_html=True)
-            except Exception:
-                st.markdown(f'<div class="ticker-card"><div style="font-weight:700;">{ticker}</div><div style="color:#4b5563;">–</div></div>', unsafe_allow_html=True)
-
-st.divider()
-
-# ── Module-Übersicht ──────────────────────────
-st.markdown("### 🗺️ Verfügbare Module")
-mc1, mc2, mc3, mc4, mc5 = st.columns(5)
-mc1.markdown("**📈 Charts**\n\nTechnische Analyse\nIndikatoren & Signale")
-mc2.markdown("**📊 Fundamentals**\n\nGuV · Bilanz · Cashflow\nAnalysten · KPIs")
-mc3.markdown("**🔍 Screener**\n\nMulti-Filter\nComposite Score")
-mc4.markdown("**📰 News**\n\nTicker News\nWatchlist Feed")
-mc5.markdown("**💼 Portfolio**\n\nP&L Tracking\nPortfolio Charts")
-
-st.divider()
-
-# ── Projekt-Status ────────────────────────────
-st.markdown("### 🗺️ Projekt Status")
-c1, c2, c3, c4 = st.columns(4)
-c1.progress(0.85, text="Phase 1: Foundation 85%")
-c2.progress(0.80, text="Phase 2: Core Features 80%")
-c3.progress(0.00, text="Phase 3: Advanced 0%")
-c4.progress(0.00, text="Phase 4: Polish 0%")
+st.caption("AI Analyst v2.0 - Powered by OpenBB & Streamlit")

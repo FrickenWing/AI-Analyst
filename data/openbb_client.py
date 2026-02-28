@@ -4,54 +4,46 @@ import json
 import requests
 import pandas as pd
 import streamlit as st
+import yfinance as yf
+import xml.etree.ElementTree as ET
 from functools import wraps
 from loguru import logger
 
-# Der Cache-Speicher muss global zugänglich sein
+# Cache Speicher
 _cache_store: dict = {}
 
 def cached(ttl_seconds: int = 300):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            # Erstelle einen eindeutigen Key basierend auf Funktionsname und Argumenten
             key_parts = [func.__name__, str(args), str(kwargs)]
             key = hashlib.md5(json.dumps(key_parts, sort_keys=True, default=str).encode()).hexdigest()
             
-            # Prüfe Cache
             if key in _cache_store:
                 val, exp = _cache_store[key]
                 if time.time() < exp:
                     return val
             
-            # Führe Funktion aus
             try:
                 res = func(*args, **kwargs)
-                # Speichere im Cache nur wenn Ergebnis gültig (nicht None/Leer bei Fehlern)
                 if res is not None:
                     _cache_store[key] = (res, time.time() + ttl_seconds)
                 return res
             except Exception as e:
                 logger.error(f"Error in {func.__name__}: {e}")
-                return None # Oder leeres Ergebnis
+                return None
         return wrapper
     return decorator
 
 class OpenBBClient:
     def __init__(self):
         self.fmp_key = st.secrets.get("FMP_API_KEY", "")
-        self._obb = None
-        # Versuch OpenBB zu laden, falls installiert
-        try:
-            from openbb import obb
-            if self.fmp_key:
-                obb.user.credentials.fmp_api_key = self.fmp_key
-            self._obb = obb
-        except:
-            pass
+        # Standard Header um wie ein Browser auszusehen (verhindert 403 Errors)
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
 
     def clear_cache(self):
-        """Leert den internen Cache komplett."""
         global _cache_store
         _cache_store.clear()
         st.cache_data.clear()
@@ -60,26 +52,9 @@ class OpenBBClient:
     def search_ticker(self, query: str) -> list:
         if not query: return []
         results = []
-        
-        # 1. FMP Search
-        if self.fmp_key:
-            try:
-                url = f"https://financialmodelingprep.com/api/v3/search?query={query}&limit=10&apikey={self.fmp_key}"
-                data = requests.get(url, timeout=3).json()
-                for item in data:
-                    results.append({
-                        "ticker": item['symbol'], 
-                        "name": item['name'], 
-                        "exchange": item.get('exchangeShortName','N/A')
-                    })
-                return results
-            except: pass
-            
-        # 2. Yahoo Fallback
         try:
-            url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=5"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            data = requests.get(url, headers=headers, timeout=3).json()
+            url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=10"
+            data = requests.get(url, headers=self.headers, timeout=4).json()
             for item in data.get('quotes', []):
                 if item.get('quoteType') in ['EQUITY', 'ETF']:
                     results.append({
@@ -88,132 +63,193 @@ class OpenBBClient:
                         "exchange": item.get('exchDisp','N/A')
                     })
         except: pass
-        
         return results
 
     @cached(ttl_seconds=300)
     def get_price_history(self, ticker: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
-        # FMP via OpenBB
-        if self.fmp_key and self._obb:
-            try:
-                start_date = (pd.Timestamp.now() - pd.Timedelta(days=730 if period=='5y' else 365)).strftime("%Y-%m-%d")
-                df = self._obb.equity.price.historical(symbol=ticker, start_date=start_date, interval=interval, provider="fmp").to_df()
-                df.index.name = "date"
-                return df.rename(columns=str.lower)[["open", "high", "low", "close", "volume"]].dropna()
-            except: pass
-        
-        # Yahoo Fallback
-        import yfinance as yf
         try:
-            df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
+            df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True, multi_level_index=False)
             if df.empty: return pd.DataFrame()
-            # MultiIndex bereinigen falls nötig
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
             df.columns = [c.lower() for c in df.columns]
-            if "adj close" in df.columns:
-                df = df.rename(columns={"adj close": "close"})
-            
-            cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
-            return df[cols].dropna()
+            return df[["open", "high", "low", "close", "volume"]].dropna()
         except:
             return pd.DataFrame()
 
     @cached(ttl_seconds=60)
     def get_quote(self, ticker: str) -> dict:
-        # 1. FMP
-        if self.fmp_key:
-            try:
-                url = f"https://financialmodelingprep.com/api/v3/quote/{ticker}?apikey={self.fmp_key}"
-                res = requests.get(url, timeout=3).json()
-                if res:
-                    d = res[0]
-                    return {
-                        "price": d.get("price"),
-                        "change": d.get("change"),
-                        "change_pct": d.get("changesPercentage", 0) / 100.0,
-                        "volume": d.get("volume"),
-                        "market_cap": d.get("marketCap"),
-                        "pe_ratio": d.get("pe"),
-                        "week_52_high": d.get("yearHigh"),
-                        "week_52_low": d.get("yearLow"),
-                        "name": d.get("name"),
-                        "exchange": d.get("exchange"),
-                    }
-            except: pass
-
-        # 2. Yahoo
-        import yfinance as yf
         try:
             t = yf.Ticker(ticker)
+            fi = t.fast_info
             i = t.info
-            price = i.get("currentPrice") or i.get("regularMarketPrice", 0)
-            prev = i.get("regularMarketPreviousClose", price)
+            price = fi.last_price if fi.last_price else i.get("currentPrice", 0)
+            prev = fi.previous_close if fi.previous_close else i.get("regularMarketPreviousClose", price)
             change = price - prev
-            change_pct = (change / prev) if prev else 0
+            pct = (change / prev) if prev else 0
             
             return {
                 "price": price,
                 "change": change,
-                "change_pct": change_pct,
+                "change_pct": pct,
                 "volume": i.get("volume"),
                 "market_cap": i.get("marketCap"),
                 "pe_ratio": i.get("trailingPE"),
+                "beta": i.get("beta"),
                 "week_52_high": i.get("fiftyTwoWeekHigh"),
                 "week_52_low": i.get("fiftyTwoWeekLow"),
                 "name": i.get("shortName"),
                 "exchange": i.get("exchange"),
+                "sector": i.get("sector"),
+                "industry": i.get("industry"),
+                "description": i.get("longBusinessSummary"),
+                "website": i.get("website"),
+                "currency": i.get("currency", "USD"),
             }
-        except:
-            return {"price": 0, "change": 0, "change_pct": 0}
+        except: return {}
 
     @cached(ttl_seconds=3600)
-    def get_news(self, ticker: str, limit: int = 5) -> list:
-        """Hole Nachrichten zu einem Ticker (FMP oder Yahoo)"""
+    def get_news(self, ticker: str, limit: int = 10) -> list:
+        """
+        Holt News via RSS (US-Englisch) mit Fallback auf yfinance API
+        """
         news_items = []
         
-        # 1. Versuch: FMP
-        if self.fmp_key:
+        # 1. Versuch: Yahoo RSS (Erzwingt Englisch via URL-Parameter)
+        try:
+            # WICHTIG: User-Agent Header mitsenden, sonst blockt Yahoo!
+            url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+            resp = requests.get(url, headers=self.headers, timeout=5)
+            
+            if resp.status_code == 200:
+                root = ET.fromstring(resp.content)
+                for item in root.findall('./channel/item')[:limit]:
+                    news_items.append({
+                        "title": item.find('title').text,
+                        "url": item.find('link').text,
+                        "source": "Yahoo Finance", 
+                        "published": item.find('pubDate').text, 
+                        "image": None
+                    })
+        except Exception as e:
+            logger.error(f"RSS News Error: {e}")
+
+        # 2. Versuch: yfinance Fallback (Falls RSS leer oder Fehler)
+        if not news_items:
             try:
-                url = f"https://financialmodelingprep.com/api/v3/stock_news?tickers={ticker}&limit={limit}&apikey={self.fmp_key}"
-                data = requests.get(url, timeout=4).json()
-                for item in data:
+                t = yf.Ticker(ticker)
+                # yfinance news ist robuster, aber manchmal lokalisiert
+                for item in t.news[:limit]:
                     news_items.append({
                         "title": item.get("title"),
-                        "url": item.get("url"),
-                        "source": item.get("site"),
-                        "published": item.get("publishedDate"), # Format: YYYY-MM-DD HH:MM:SS
-                        "summary": item.get("text"),
-                        "image": item.get("image")
+                        "url": item.get("link"),
+                        "source": item.get("publisher"),
+                        "published": str(pd.to_datetime(item.get("providerPublishTime"), unit='s')),
+                        "image": None
                     })
-                return news_items
             except Exception as e:
-                logger.error(f"FMP News Error: {e}")
-
-        # 2. Versuch: Yahoo Finance
-        try:
-            import yfinance as yf
-            t = yf.Ticker(ticker)
-            ynews = t.news
-            for item in ynews[:limit]:
-                # Yahoo liefert Zeitstempel oft als Epoch
-                pub = item.get("providerPublishTime")
-                news_items.append({
-                    "title": item.get("title"),
-                    "url": item.get("link"),
-                    "source": item.get("publisher"),
-                    "published": pub, 
-                    "summary": "Mehr auf Yahoo Finance lesen...", # Yahoo liefert oft keine Summary im Free Tier
-                    "image": None
-                })
-        except Exception as e:
-             logger.error(f"Yahoo News Error: {e}")
-             
+                logger.error(f"YF News Fallback Error: {e}")
+            
         return news_items
 
-    # Dummy methods für Kompatibilität
-    def get_company_info(self, t): return {"name": t}
-    def get_financials(self, t, type_): return pd.DataFrame()
+    @cached(ttl_seconds=3600*12)
+    def get_financials(self, ticker: str) -> dict:
+        # FMP Bevorzugt
+        if self.fmp_key:
+            try:
+                out = {}
+                res = requests.get(f"https://financialmodelingprep.com/api/v3/income-statement/{ticker}?limit=5&apikey={self.fmp_key}").json()
+                if isinstance(res, list):
+                    df = pd.DataFrame(res).set_index("calendarYear")
+                    out["income"] = df[["revenue","netIncome","operatingIncome","eps"]].T
+                
+                res = requests.get(f"https://financialmodelingprep.com/api/v3/balance-sheet-statement/{ticker}?limit=5&apikey={self.fmp_key}").json()
+                if isinstance(res, list):
+                    df = pd.DataFrame(res).set_index("calendarYear")
+                    out["balance"] = df[["totalAssets","totalLiabilities","totalStockholdersEquity","cashAndCashEquivalents"]].T
+
+                if out: return out
+            except: pass
+
+        # Yahoo Fallback
+        try:
+            t = yf.Ticker(ticker)
+            def clean(df):
+                if df is None or df.empty: return pd.DataFrame()
+                df.columns = [str(c)[:4] for c in df.columns] 
+                return df
+
+            return {
+                "income": clean(t.income_stmt),
+                "balance": clean(t.balance_sheet),
+                "cashflow": clean(t.cashflow)
+            }
+        except:
+            return {"income": pd.DataFrame(), "balance": pd.DataFrame(), "cashflow": pd.DataFrame()}
+
+    @cached(ttl_seconds=3600*12)
+    def get_analyst_info(self, ticker: str) -> dict:
+        try:
+            t = yf.Ticker(ticker)
+            i = t.info
+            current = i.get("currentPrice", 1)
+            target = i.get("targetMeanPrice")
+            return {
+                "recommendation": i.get("recommendationKey", "Hold").replace("_", " ").title(),
+                "target_mean": target,
+                "target_high": i.get("targetHighPrice"),
+                "target_low": i.get("targetLowPrice"),
+                "fmt_target": f"{target} {i.get('currency','USD')}" if target else "N/A",
+                "fmt_upside": f"{((target/current)-1):.1%}" if target and current else "N/A"
+            }
+        except: return {}
+
+    @cached(ttl_seconds=3600)
+    def get_key_stats(self, ticker: str) -> dict:
+        try:
+            t = yf.Ticker(ticker)
+            i = t.info
+            
+            def fmt(val, is_pct=False):
+                if val is None: return "-"
+                if is_pct: return f"{val:.2%}" if val < 5 else f"{val * 100:.2f}%"
+                return f"{val:.2f}"
+
+            return {
+                "Valuation": {
+                    "Market Cap": i.get("marketCap"),
+                    "Enterprise Value": i.get("enterpriseValue"),
+                    "Trailing P/E": fmt(i.get("trailingPE")),
+                    "Forward P/E": fmt(i.get("forwardPE")),
+                    "PEG Ratio": fmt(i.get("pegRatio")),
+                    "Price/Sales": fmt(i.get("priceToSalesTrailing12Months")),
+                    "Price/Book": fmt(i.get("priceToBook")),
+                },
+                "Profitability": {
+                    "Profit Margin": fmt(i.get("profitMargins"), True),
+                    "Operating Margin": fmt(i.get("operatingMargins"), True),
+                    "Return on Assets": fmt(i.get("returnOnAssets"), True),
+                    "Return on Equity": fmt(i.get("returnOnEquity"), True),
+                    "Revenue (ttm)": i.get("totalRevenue"),
+                    "Gross Profit": i.get("grossProfits"),
+                },
+                "Balance Sheet": {
+                    "Total Cash": i.get("totalCash"),
+                    "Total Debt": i.get("totalDebt"),
+                    "Current Ratio": fmt(i.get("currentRatio")),
+                    "Quick Ratio": fmt(i.get("quickRatio")),
+                    "Book Value": fmt(i.get("bookValue")),
+                },
+                "Trading Info": {
+                    "Beta": fmt(i.get("beta")),
+                    "Short Ratio": fmt(i.get("shortRatio")),
+                    "Shares Out": i.get("sharesOutstanding"),
+                    "Float": i.get("floatShares"),
+                    "Insiders": fmt(i.get("heldPercentInsiders"), True),
+                    "Institutions": fmt(i.get("heldPercentInstitutions"), True),
+                }
+            }
+        except Exception as e:
+            logger.error(f"Stats Error: {e}")
+            return {}
 
 _client = None
 def get_client():

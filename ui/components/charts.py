@@ -6,6 +6,66 @@ from plotly.subplots import make_subplots
 import pandas as pd
 from typing import Dict
 
+def render_candlestick_chart(df: pd.DataFrame, title: str = "Price Action", height: int = 500):
+    """
+    Zeigt einen Candlestick Chart (OHLC)
+    """
+    if df is None or df.empty:
+        st.info("Keine Chart-Daten verfügbar")
+        return
+
+    # Prüfen ob notwendige Spalten da sind
+    required_cols = ['open', 'high', 'low', 'close']
+    # Spaltennamen normalisieren (lowercase)
+    df.columns = [c.lower() for c in df.columns]
+    
+    if not all(col in df.columns for col in required_cols):
+        st.warning(f"Fehlende Daten für Chart. Benötigt: {required_cols}")
+        return
+
+    fig = go.Figure(data=[go.Candlestick(
+        x=df.index,
+        open=df['open'],
+        high=df['high'],
+        low=df['low'],
+        close=df['close'],
+        name="Price"
+    )])
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=20)),
+        height=height,
+        template="plotly_dark",
+        xaxis_rangeslider_visible=False,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=0, r=0, t=40, b=0),
+        yaxis=dict(gridcolor="#333"),
+        xaxis=dict(gridcolor="#333")
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_bar_chart(df: pd.DataFrame, x_col: str, y_col: str, title: str, color: str = "#00C805"):
+    """
+    Einfacher Bar Chart Helper
+    """
+    fig = go.Figure(go.Bar(
+        x=df[x_col],
+        y=df[y_col],
+        marker_color=color
+    ))
+    
+    fig.update_layout(
+        title=title,
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        height=300,
+        margin=dict(t=40, b=0, l=0, r=0)
+    )
+    return fig
+
 def create_main_chart(df: pd.DataFrame, ticker: str, show_indicators: dict) -> go.Figure:
     # Subplots Setup
     has_rsi = show_indicators.get("rsi", False) and 'rsi' in df.columns
@@ -129,4 +189,88 @@ def create_main_chart(df: pd.DataFrame, ticker: str, show_indicators: dict) -> g
     if 'volume' in df.columns:
          fig.update_yaxes(range=[0, df['volume'].max() * 4], showticklabels=False, secondary_y=True, row=1, col=1)
 
+    return fig
+
+def render_target_price_chart(current_price, target_low, target_mean, target_high, currency="USD"):
+    """
+    Erstellt einen Chart, der den aktuellen Preis im Verhältnis zu den Analysten-Zielen zeigt.
+    """
+    if not all([current_price, target_low, target_mean, target_high]):
+        return None
+
+    fig = go.Figure()
+
+    # 1. Hintergrund-Balken für die Range (Low bis High)
+    fig.add_trace(go.Bar(
+        y=["Kursziel"],
+        x=[target_high - target_low],
+        base=[target_low],
+        orientation='h',
+        marker_color='rgba(255, 255, 255, 0.1)',
+        name='Analysten Range (Low-High)',
+        hoverinfo='skip'
+    ))
+
+    # 2. Linie für den Durchschnitt (Mean)
+    fig.add_trace(go.Scatter(
+        x=[target_mean, target_mean],
+        y=[-0.4, 0.4],
+        mode='lines',
+        line=dict(color='#00C805', width=4, dash='dot'),
+        name=f'Ø Kursziel ({target_mean} {currency})'
+    ))
+
+    # 3. Dreieck für den Aktuellen Preis
+    fig.add_trace(go.Scatter(
+        x=[current_price],
+        y=[0],
+        mode='markers',
+        marker=dict(symbol='triangle-down', size=15, color='#2962FF'),
+        name=f'Aktuell ({current_price} {currency})'
+    ))
+
+    # Layout Anpassungen
+    fig.update_layout(
+        title="Potenzial-Analyse",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        height=180, # Kompakt
+        margin=dict(l=20, r=20, t=40, b=20),
+        xaxis=dict(title=f"Preis in {currency}", showgrid=True, gridcolor='#333'),
+        yaxis=dict(showticklabels=False, fixedrange=True),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    
+    return fig
+
+def render_recommendation_gauge(score):
+    """
+    Zeigt einen simplen Gauge Chart für die Kaufempfehlung (1=Sell, 5=Buy)
+    """
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = score,
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        title = {'text': "Analysten Konsensus"},
+        gauge = {
+            'axis': {'range': [1, 5], 'tickwidth': 1, 'tickcolor': "white"},
+            'bar': {'color': "#00C805" if score >= 3.5 else "#FF3B30" if score <= 2.5 else "#FF9500"},
+            'bgcolor': "white",
+            'borderwidth': 2,
+            'bordercolor': "#333",
+            'steps': [
+                {'range': [1, 2.5], 'color': 'rgba(255, 59, 48, 0.3)'},
+                {'range': [2.5, 3.5], 'color': 'rgba(255, 149, 0, 0.3)'},
+                {'range': [3.5, 5], 'color': 'rgba(0, 200, 5, 0.3)'}],
+        }
+    ))
+    
+    fig.update_layout(
+        height=250, 
+        margin=dict(l=30, r=30, t=50, b=30),
+        paper_bgcolor='rgba(0,0,0,0)',
+        font={'color': "white"}
+    )
     return fig
