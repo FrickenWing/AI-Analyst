@@ -1,7 +1,9 @@
-@echo off
-title KI Trading Terminal Start-Skript
-echo Lade AI-Analyst Terminal v2 2026...
-echo -----------------------------------
+:loop
+echo.
+echo ========================================================
+echo  Starte AI-Analyst... (Druecke STRG+C zum Beenden)
+echo ========================================================
+echo.
 
 :: 1. Aktiviere die Miniconda-Umgebung
 call "C:\Users\Luca1\anaconda3\Scripts\activate.bat" openbb_env
@@ -15,4 +17,9 @@ pip install -r requirements.txt
 echo Starte Streamlit-Server...
 streamlit run app.py
 
-pause
+:: Wenn Streamlit beendet wird (z.B. durch Fehler), wartet er 3 Sekunden
+:: und startet dann von vorne
+echo.
+echo ⚠️  Server wurde beendet. Neustart in 3 Sekunden...
+timeout /t 3 >nul
+goto loop
